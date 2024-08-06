@@ -1,0 +1,13 @@
+{
+	application,
+	'hnc_csv',
+	[
+		{description, "Parser/Writer for CSV data"},
+		{vsn, "0.1.0"},
+		{modules, ['hnc_csv']},
+		{applications, [kernel, stdlib]},
+		{licenses, [<<"ISC">>]},
+		{build_tools, [<<"make">>, <<"rebar3">>]},
+		{links, #{<<"GitHub">> => <<"https://github.com/hnc-agency/hnc_csv">>}}
+	]
+}.
