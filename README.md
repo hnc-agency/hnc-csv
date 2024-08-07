@@ -200,3 +200,8 @@ ok
 7> file:read_file("example2.csv").
 {ok,<<"'a';'b';'c'\n'd,d';'e\"e';'f\r\nf'\n">>}
 ```
+
+# Authors
+
+* Maria Scott (Maria-12648430)
+* Jan Uhlig (juhlig)
