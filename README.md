@@ -57,6 +57,16 @@ in entirety in one operation unfeasible or dangerous.
 The functions `decode_init/0,1,2`, `decode_add_data/2`, `decode_next_line/1`
 and `decode_flush/1` can be used together to decode CSV documents in
 smaller chunks.
+* `decode_init/0,1,2` creates a decoder state to be used in the
+  other incremental decoding functions.
+* `decode_add_data/2` adds another chunk of unprocessed data to the
+  state and returns an updated state.
+* `decode_next_line/1` decodes and returns the next line, together with
+  an updated state. If the data in the state is exhausted, the atom
+  `end_of_data` is returned instead of a line.
+* `decode_flush/1` returns any as yet unfinished line in the given state,
+  together with any yet unprocessed data. If there is no unfinished line
+  in the state, the atom `undefined` is returned instead of a line.
 
 #### Example
 
