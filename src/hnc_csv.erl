@@ -12,6 +12,12 @@
 %% WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 %% ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 %% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+%% @doc CSV Decoder/Encoder
+%%
+%% @author Maria Scott <maria-12648430@hnc-agency.org>
+%% @author Jan Uhlig <juhlig@hnc-agency.org>
+%% @copyright 2024 Maria Scott, Jan Uhlig
 -module(hnc_csv).
 
 -export([decode/1, decode/2]).
@@ -44,10 +50,16 @@
 
 -export_type([state/0]).
 
+%% @equiv decode(RawData, default_decode_options())
 -spec decode(RawData :: data()) -> {Lines :: [csv_line()], Rest :: data()}.
 decode(Data) ->
 	decode(Data, default_decode_options()).
 
+%% @doc Decodes the raw CSV document given in `RawData', using the given `Options',
+%%      into a CSV data structure.
+%%
+%%      The return value is a list of CSV lines, which in turn are lists of CSV fields,
+%%      which in turn are binaries representing the CSV field values.
 -spec decode(RawData :: data(), Options :: decode_options()) -> Lines :: [csv_line()].
 decode(Data, Opts) when is_binary(Data), is_map(Opts) ->
 	decode1(decode_init(Data, Opts), []).
@@ -65,16 +77,29 @@ decode3({undefined, _}, Acc) ->
 decode3({LastLine, _}, Acc) ->
 	lists:reverse([LastLine|Acc]).
 
+%% @equiv decode_init(<<>>, default_decode_options())
 -spec decode_init() -> State :: state().
 decode_init() ->
 	decode_init(<<>>, default_decode_options()).
 
+%% @doc Equivalent to {@link decode_init/2. `decode_init(Data, default_decode_options())'}
+%%      or {@link decode_init/2. `decode_init(<<>>, Options)'}, respectively.
 -spec decode_init(DataOrOptions :: (data() | decode_options())) -> State :: state().
 decode_init(Data) when is_binary(Data) ->
 	decode_init(Data, default_decode_options());
 decode_init(Opts) when is_map(Opts) ->
 	decode_init(<<>>, Opts).
 
+%% @doc Creates a CSV decoder state, prepopulated with the given `RawData' and using
+%%      the given `Options'.
+%%
+%%      The return value can be used in the functions {@link decode_add_data/2},
+%%      {@link decode_next_line/1} and {@link decode_flush/1} to incrementally
+%%      decode a CSV document.
+%%
+%% @see decode_add_data/2
+%% @see decode_next_line/1
+%% @see decode_flush/1
 -spec decode_init(RawData :: data(), Options :: decode_options()) -> State :: state().
 decode_init(Data, Opts) when is_binary(Data), is_map(Opts) ->
 	ok = validate_decode_opts(Opts),
@@ -85,14 +110,31 @@ decode_init(Data, Opts) when is_binary(Data), is_map(Opts) ->
 			do_decode(undefined, <<Data/binary, MoreData/binary>>, Opts, <<>>, [])
 	end.
 
+%% @doc Decodes and returns the next CSV line in the given decoder state, together with an updated
+%%      state which can be used for further incremental decoding.
+%%
+%%      If the decoder state is exhausted, the atom `end_of_data' is returned instead of a line. In
+%%      this case, the function {@link decode_add_data/2} can be used to add more data to the state,
+%%      or {@link decode_flush/1} can be used to flush a possibly unfinished line together with any
+%%      yet unprocessed data from the state.
+%%
+%% @see decode_add_data/2
+%% @see decode_flush/1
 -spec decode_next_line(State0 :: state()) -> {Result :: ('end_of_data' | csv_line()), State1 :: state()}.
 decode_next_line(Cont) when is_function(Cont, 1) ->
 	Cont(<<>>).
 
+%% @doc Adds another chunk of unprocessed `RawData' to the given decoder `State'.
+%%
+%%      Returns an updated state with the given data added.
 -spec decode_add_data(State0 :: state(), RawData :: data()) -> State1 :: state().
 decode_add_data(Cont, Data) ->
 	fun(MoreData) -> Cont(<<Data/binary, MoreData/binary>>) end.
 
+%% @doc Flushes a possibly unfinished line together with any yet unprocessed data from the state.
+%%
+%%      If there is no possibly unfinished line in the state, the atom `undefined' is returned
+%%      instead of a line.
 -spec decode_flush(State :: state()) -> {Line :: ('undefined' | csv_line()), Rest :: data()}.
 decode_flush(Cont) when is_function(Cont, 1) ->
 	Cont(flush).
@@ -150,10 +192,12 @@ do_decode_eol(More, Opts, FieldAcc, LineAcc) ->
 			do_decode(undefined, <<More/binary, Data/binary>>, Opts, <<>>, [])
 	 end}.
 
+%% @equiv encode(Lines, default_encode_options())
 -spec encode(Lines :: [csv_line()]) -> RawData :: data().
 encode(Lines) ->
 	encode(Lines, default_encode_options()).
 
+%% @doc Encodes the given CSV data structure into a CSV binary, using the given `Options'.
 -spec encode(Lines :: [csv_line()], Options :: encode_options()) -> RawData :: data().
 encode(Lines, Opts) ->
 	ok = validate_encode_opts(Opts),
@@ -199,12 +243,28 @@ encode_field(<<_/binary>>=Field, #{separator:=Sep, enclosure:=Enc, quote:=Quot, 
 		false -> <<Enc, (binary:replace(Field, [<<Enc>>, <<Quot>>], <<Quot>>, [global, {insert_replaced, 1}]))/binary, Enc>>
 	end.
 
+%% @doc Returns the default decode options.
+%%
+%% <ul>
+%%   <li>`separator': `$,'</li>
+%%   <li>`enclosure': `$"'</li>
+%%   <li>`quote': `$"'</li>
+%% </ul>
 -spec default_decode_options() -> decode_options().
 default_decode_options() ->
 	#{separator => $,,
 	  enclosure => $",
 	  quote => $"}.
 
+%% @doc Returns the default encode options.
+%%
+%% <ul>
+%%   <li>`separator': `$,'</li>
+%%   <li>`enclosure': `$"'</li>
+%%   <li>`quote': `$"'</li>
+%%   <li>`encode': `optionally'</li>
+%%   <li>`end_of_line': `<<"\r\n">>'</li>
+%% </ul>
 -spec default_encode_options() -> encode_options().
 default_encode_options() ->
 	#{separator => $,,
