@@ -14,16 +14,15 @@
 %% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 -module(hnc_csv).
 
--export([parse/1, parse/2]).
--export([parse_init/0, parse_init/1, parse_init/2]).
--export([parse_add_data/2]).
--export([parse_next_line/1]).
--export([parse_flush/1]).
--export([default_parse_options/0]).
+-export([decode/1, decode/2]).
+-export([decode_init/0, decode_init/1, decode_init/2]).
+-export([decode_add_data/2]).
+-export([decode_next_line/1]).
+-export([decode_flush/1]).
+-export([default_decode_options/0]).
 
--export([write/1, write/2]).
--export([write_line/1, write_line/2]).
--export([default_write_options/0]).
+-export([encode/1, encode/2]).
+-export([default_encode_options/0]).
 
 -type data() :: binary().
 
@@ -31,11 +30,11 @@
 
 -type csv_line() :: [csv_field()].
 
--type parse_options() :: #{'separator' := $, | $; | $\t,
-			   'enclosure' := 'undefined' | $" | $',
-			   'quote' := 'undefined' | $\\ | $" | $'}.
+-type decode_options() :: #{'separator' := $, | $; | $\t,
+			    'enclosure' := 'undefined' | $" | $',
+			    'quote' := 'undefined' | $\\ | $" | $'}.
 
--type write_options() :: #{'separator' := $, | $; | $\t,
+-type encode_options() :: #{'separator' := $, | $; | $\t,
 			   'enclosure' := 'undefined' | $" | $',
 			   'quote' := 'undefined' | $\\ | $" | $',
 			   'enclose' := 'never' | 'always' | 'optional',
@@ -45,62 +44,61 @@
 
 -export_type([state/0]).
 
--spec parse(RawData :: data()) -> {Lines :: [csv_line()], Rest :: data()}.
-parse(Data) ->
-	parse(Data, default_parse_options()).
+-spec decode(RawData :: data()) -> {Lines :: [csv_line()], Rest :: data()}.
+decode(Data) ->
+	decode(Data, default_decode_options()).
 
--spec parse(RawData :: data(), Options :: parse_options()) -> Lines :: [csv_line()].
-parse(Data, Opts) when is_binary(Data), is_map(Opts) ->
-	parse1(parse_init(Data, Opts), []).
+-spec decode(RawData :: data(), Options :: decode_options()) -> Lines :: [csv_line()].
+decode(Data, Opts) when is_binary(Data), is_map(Opts) ->
+	decode1(decode_init(Data, Opts), []).
 
-parse1(Cont, Acc) ->
-	parse2(parse_next_line(Cont), Acc).
+decode1(Cont, Acc) ->
+	decode2(decode_next_line(Cont), Acc).
 
-parse2({end_of_data, Cont}, Acc) ->
-	parse3(parse_flush(Cont), Acc);
-parse2({Line, Cont}, Acc) ->
-	parse1(Cont, [Line|Acc]).
+decode2({end_of_data, Cont}, Acc) ->
+	decode3(decode_flush(Cont), Acc);
+decode2({Line, Cont}, Acc) ->
+	decode1(Cont, [Line|Acc]).
 
-parse3({undefined, _}, Acc) ->
+decode3({undefined, _}, Acc) ->
 	lists:reverse(Acc);
-parse3({LastLine, _}, Acc) ->
+decode3({LastLine, _}, Acc) ->
 	lists:reverse([LastLine|Acc]).
 
--spec parse_init() -> State :: state().
-parse_init() ->
-	parse_init(<<>>, default_parse_options()).
+-spec decode_init() -> State :: state().
+decode_init() ->
+	decode_init(<<>>, default_decode_options()).
 
--spec parse_init(Data :: data()) -> State :: state();
-                (Options :: parse_options()) -> State :: state().
-parse_init(Data) when is_binary(Data) ->
-	parse_init(Data, default_parse_options());
-parse_init(Opts) when is_map(Opts) ->
-	parse_init(<<>>, Opts).
+-spec decode_init(DataOrOptions :: (data() | decode_options())) -> State :: state().
+decode_init(Data) when is_binary(Data) ->
+	decode_init(Data, default_decode_options());
+decode_init(Opts) when is_map(Opts) ->
+	decode_init(<<>>, Opts).
 
--spec parse_init(RawData :: data(), Options :: parse_options()) -> State :: state().
-parse_init(Data, Opts) when is_binary(Data), is_map(Opts) ->
-	ok = validate_parse_opts(Opts),
+-spec decode_init(RawData :: data(), Options :: decode_options()) -> State :: state().
+decode_init(Data, Opts) when is_binary(Data), is_map(Opts) ->
+	ok = validate_decode_opts(Opts),
 	fun
 		(flush) ->
 			{undefined, Data};
 		(MoreData) ->
-			do_parse(undefined, <<Data/binary, MoreData/binary>>, Opts, <<>>, [])
+			do_decode(undefined, <<Data/binary, MoreData/binary>>, Opts, <<>>, [])
 	end.
 
--spec parse_next_line(State0 :: state()) -> {Result :: ('end_of_data' | csv_line()), State1 :: state()}.
-parse_next_line(Cont) when is_function(Cont, 1) ->
+-spec decode_next_line(State0 :: state()) -> {Result :: ('end_of_data' | csv_line()), State1 :: state()}.
+decode_next_line(Cont) when is_function(Cont, 1) ->
 	Cont(<<>>).
 
--spec parse_add_data(State0 :: state(), RawData :: data()) -> State1 :: state().
-parse_add_data(Cont, Data) ->
+-spec decode_add_data(State0 :: state(), RawData :: data()) -> State1 :: state().
+decode_add_data(Cont, Data) ->
 	fun(MoreData) -> Cont(<<Data/binary, MoreData/binary>>) end.
 
--spec parse_flush(State :: state()) -> {Line :: ('undefined' | csv_line()), Rest :: data()}.
-parse_flush(Cont) when is_function(Cont, 1) ->
+-spec decode_flush(State :: state()) -> {Line :: ('undefined' | csv_line()), Rest :: data()}.
+decode_flush(Cont) when is_function(Cont, 1) ->
 	Cont(flush).
 
-do_parse(Mode, More, #{quote:=Quot}=Opts, FieldAcc, LineAcc) when More =:= <<>>;
-								  Mode =:= enclosed_field, More =:= <<Quot>> ->
+do_decode(Mode, More, #{quote:=Quot}=Opts, FieldAcc, LineAcc) when More =:= <<>>;
+								   Mode =:= enclosed_field, More =:= <<Quot>> ->
 	{end_of_data,
 	 fun
 		(flush) when Mode=:=undefined ->
@@ -108,123 +106,114 @@ do_parse(Mode, More, #{quote:=Quot}=Opts, FieldAcc, LineAcc) when More =:= <<>>;
 		(flush) ->
 			{lists:reverse([<<FieldAcc/binary, More/binary>>|LineAcc]), <<>>};
 		(Data) ->
-			do_parse(Mode, <<More/binary, Data/binary>>, Opts, FieldAcc, LineAcc)
+			do_decode(Mode, <<More/binary, Data/binary>>, Opts, FieldAcc, LineAcc)
 	 end};
-do_parse(undefined, <<$\r, More/binary>>, Opts, FieldAcc, LineAcc) ->
-	do_parse(undefined, More, Opts, FieldAcc, LineAcc);
-do_parse(undefined, <<$\n, More/binary>>, Opts, FieldAcc, LineAcc) ->
-	do_parse(undefined, More, Opts, FieldAcc, LineAcc);
-do_parse(line, <<$\r, More/binary>>, Opts, FieldAcc, LineAcc) ->
-	do_parse_eol(More, Opts, FieldAcc, LineAcc);
-do_parse(line, <<$\n, More/binary>>, Opts, FieldAcc, LineAcc) ->
-	do_parse_eol(More, Opts, FieldAcc, LineAcc);
-do_parse(field, <<$\r, More/binary>>, Opts, FieldAcc, LineAcc) ->
-	do_parse_eol(More, Opts, FieldAcc, LineAcc);
-do_parse(field, <<$\n, More/binary>>, Opts, FieldAcc, LineAcc) ->
-	do_parse_eol(More, Opts, FieldAcc, LineAcc);
-do_parse(undefined, More, Opts, FieldAcc, LineAcc) ->
-	do_parse(line, More, Opts, FieldAcc, LineAcc);
-do_parse(line, <<Sep, More/binary>>, #{separator:=Sep}=Opts, _FieldAcc, LineAcc) ->
-	do_parse(line, More, Opts, <<>>, [<<>>|LineAcc]);
-do_parse(field, <<Sep, More/binary>>, #{separator:=Sep}=Opts, FieldAcc, LineAcc) ->
-	do_parse(line, More, Opts, <<>>, [FieldAcc|LineAcc]);
-do_parse(line, More, Opts, FieldAcc, LineAcc) ->
-	do_parse(field, More, Opts, FieldAcc, LineAcc);
-do_parse(field, <<Enc, More/binary>>, #{enclosure:=Enc}=Opts, <<>>, LineAcc) ->
-	do_parse(enclosed_field, More, Opts, <<>>, LineAcc);
-do_parse(field, <<C, More/binary>>, #{enclosure:=Enc}=Opts, FieldAcc, LineAcc) when C=/=Enc ->
-	do_parse(field, More, Opts, <<FieldAcc/binary, C>>, LineAcc);
-do_parse(enclosed_field, <<Quot, Quot, More/binary>>, #{enclosure:=Enc, quote:=Quot}=Opts, FieldAcc, LineAcc) when Quot=/=Enc ->
-	do_parse(enclosed_field, More, Opts, <<FieldAcc/binary, Quot>>, LineAcc);
-do_parse(enclosed_field, <<Quot, Enc, More/binary>>, #{enclosure:=Enc, quote:=Quot}=Opts, FieldAcc, LineAcc) ->
-	do_parse(enclosed_field, More, Opts, <<FieldAcc/binary, Enc>>, LineAcc);
-do_parse(enclosed_field, <<Enc, More/binary>>, #{enclosure:=Enc}=Opts, FieldAcc, LineAcc) ->
-	do_parse(field, More, Opts, FieldAcc, LineAcc);
-do_parse(enclosed_field, <<C, More/binary>>, Opts, FieldAcc, LineAcc) ->
-	do_parse(enclosed_field, More, Opts, <<FieldAcc/binary, C>>, LineAcc).
+do_decode(undefined, <<$\r, More/binary>>, Opts, FieldAcc, LineAcc) ->
+	do_decode(undefined, More, Opts, FieldAcc, LineAcc);
+do_decode(undefined, <<$\n, More/binary>>, Opts, FieldAcc, LineAcc) ->
+	do_decode(undefined, More, Opts, FieldAcc, LineAcc);
+do_decode(line, <<$\r, More/binary>>, Opts, FieldAcc, LineAcc) ->
+	do_decode_eol(More, Opts, FieldAcc, LineAcc);
+do_decode(line, <<$\n, More/binary>>, Opts, FieldAcc, LineAcc) ->
+	do_decode_eol(More, Opts, FieldAcc, LineAcc);
+do_decode(field, <<$\r, More/binary>>, Opts, FieldAcc, LineAcc) ->
+	do_decode_eol(More, Opts, FieldAcc, LineAcc);
+do_decode(field, <<$\n, More/binary>>, Opts, FieldAcc, LineAcc) ->
+	do_decode_eol(More, Opts, FieldAcc, LineAcc);
+do_decode(undefined, More, Opts, FieldAcc, LineAcc) ->
+	do_decode(line, More, Opts, FieldAcc, LineAcc);
+do_decode(line, <<Sep, More/binary>>, #{separator:=Sep}=Opts, _FieldAcc, LineAcc) ->
+	do_decode(line, More, Opts, <<>>, [<<>>|LineAcc]);
+do_decode(field, <<Sep, More/binary>>, #{separator:=Sep}=Opts, FieldAcc, LineAcc) ->
+	do_decode(line, More, Opts, <<>>, [FieldAcc|LineAcc]);
+do_decode(line, More, Opts, FieldAcc, LineAcc) ->
+	do_decode(field, More, Opts, FieldAcc, LineAcc);
+do_decode(field, <<Enc, More/binary>>, #{enclosure:=Enc}=Opts, <<>>, LineAcc) ->
+	do_decode(enclosed_field, More, Opts, <<>>, LineAcc);
+do_decode(field, <<C, More/binary>>, #{enclosure:=Enc}=Opts, FieldAcc, LineAcc) when C=/=Enc ->
+	do_decode(field, More, Opts, <<FieldAcc/binary, C>>, LineAcc);
+do_decode(enclosed_field, <<Quot, Quot, More/binary>>, #{enclosure:=Enc, quote:=Quot}=Opts, FieldAcc, LineAcc) when Quot=/=Enc ->
+	do_decode(enclosed_field, More, Opts, <<FieldAcc/binary, Quot>>, LineAcc);
+do_decode(enclosed_field, <<Quot, Enc, More/binary>>, #{enclosure:=Enc, quote:=Quot}=Opts, FieldAcc, LineAcc) ->
+	do_decode(enclosed_field, More, Opts, <<FieldAcc/binary, Enc>>, LineAcc);
+do_decode(enclosed_field, <<Enc, More/binary>>, #{enclosure:=Enc}=Opts, FieldAcc, LineAcc) ->
+	do_decode(field, More, Opts, FieldAcc, LineAcc);
+do_decode(enclosed_field, <<C, More/binary>>, Opts, FieldAcc, LineAcc) ->
+	do_decode(enclosed_field, More, Opts, <<FieldAcc/binary, C>>, LineAcc).
 
-do_parse_eol(More, Opts, FieldAcc, LineAcc) ->
+do_decode_eol(More, Opts, FieldAcc, LineAcc) ->
 	{lists:reverse([FieldAcc|LineAcc]),
 	 fun
 		(flush) ->
 			{undefined, More};
 		(Data) ->
-			do_parse(undefined, <<More/binary, Data/binary>>, Opts, <<>>, [])
+			do_decode(undefined, <<More/binary, Data/binary>>, Opts, <<>>, [])
 	 end}.
 
--spec write(Lines :: [csv_line()]) -> RawData :: data().
-write(Lines) ->
-	write(Lines, default_write_options()).
+-spec encode(Lines :: [csv_line()]) -> RawData :: data().
+encode(Lines) ->
+	encode(Lines, default_encode_options()).
 
--spec write(Lines :: [csv_line()], Options :: write_options()) -> RawData :: data().
-write(Lines, Opts) ->
-	ok = validate_write_opts(Opts),
-	write1(Lines, Opts, undefined).
+-spec encode(Lines :: [csv_line()], Options :: encode_options()) -> RawData :: data().
+encode(Lines, Opts) ->
+	ok = validate_encode_opts(Opts),
+	encode(Lines, Opts, undefined).
 
-write1([], _Opts, undefined) ->
+encode([], _Opts, undefined) ->
 	<<>>;
-write1([], _Opts, Acc) ->
+encode([], _Opts, Acc) ->
 	Acc;
-write1([Line|More], Opts, undefined) ->
-	write1(More, Opts, write_line1(Line, Opts));
-write1([Line|More], Opts, Acc) ->
-	write1(More, Opts, <<Acc/binary, (write_line1(Line, Opts))/binary>>).
+encode([Line|More], Opts, undefined) ->
+	encode(More, Opts, encode_line(Line, Opts));
+encode([Line|More], Opts, Acc) ->
+	encode(More, Opts, <<Acc/binary, (encode_line(Line, Opts))/binary>>).
 
--spec write_line(Line :: csv_line()) -> RawData :: data().
-write_line(Fields) ->
-	write_line(Fields, default_write_options()).
+encode_line(Fields, Opts) ->
+	encode_line(Fields, Opts, undefined).
 
--spec write_line(Line :: csv_line(), Options :: write_options()) -> RawData :: data().
-write_line(Fields, Opts) ->
-	ok = validate_write_opts(Opts),
-	write_line1(Fields, Opts).
-
-write_line1(Fields, Opts) ->
-	write_line1(Fields, Opts, undefined).
-
-write_line1([], _Opts, undefined) ->
+encode_line([], _Opts, undefined) ->
 	<<>>;
-write_line1([], #{end_of_line:=EOL}, Acc) ->
+encode_line([], #{end_of_line:=EOL}, Acc) ->
 	<<Acc/binary, EOL/binary>>;
-write_line1([Field|More], Opts, undefined) ->
-	write_line1(More, Opts, write_field1(Field, Opts));
-write_line1([Field|More], #{separator:=Sep}=Opts, Acc) ->
-	write_line1(More, Opts, <<Acc/binary, Sep, (write_field1(Field, Opts))/binary>>).
+encode_line([Field|More], Opts, undefined) ->
+	encode_line(More, Opts, encode_field(Field, Opts));
+encode_line([Field|More], #{separator:=Sep}=Opts, Acc) ->
+	encode_line(More, Opts, <<Acc/binary, Sep, (encode_field(Field, Opts))/binary>>).
 
-write_field1(<<>>, #{enclosure:=Enc, enclose:=always}) ->
+encode_field(<<>>, #{enclosure:=Enc, enclose:=always}) ->
 	<<Enc, Enc>>;
-write_field1(<<_/binary>>=Field, #{enclosure:=Enc, quote:=Quot, enclose:=always}) ->
+encode_field(<<_/binary>>=Field, #{enclosure:=Enc, quote:=Quot, enclose:=always}) ->
 	<<Enc, (binary:replace(Field, [<<Enc>>, <<Quot>>], <<Quot>>, [global, {insert_replaced, 1}]))/binary, Enc>>;
-write_field1(<<>>, #{enclose:=never}) ->
+encode_field(<<>>, #{enclose:=never}) ->
 	<<>>;
-write_field1(<<_/binary>>=Field, #{separator:=Sep, enclose:=never}) ->
+encode_field(<<_/binary>>=Field, #{separator:=Sep, enclose:=never}) ->
 	case nomatch =:= binary:match(Field, [<<Sep>>, <<$\r>>, <<$\n>>]) of
 		true -> Field;
 		false -> error(special_char_in_field)
 	end;
-write_field1(<<>>, #{enclose:=optional}) ->
+encode_field(<<>>, #{enclose:=optional}) ->
 	<<>>;
-write_field1(<<_/binary>>=Field, #{separator:=Sep, enclosure:=Enc, quote:=Quot, enclose:=optional}) ->
+encode_field(<<_/binary>>=Field, #{separator:=Sep, enclosure:=Enc, quote:=Quot, enclose:=optional}) ->
 	case nomatch =:= binary:match(Field, [<<Sep>>, <<Enc>>, <<$\r>>, <<$\n>>]) of
 		true -> Field;
 		false -> <<Enc, (binary:replace(Field, [<<Enc>>, <<Quot>>], <<Quot>>, [global, {insert_replaced, 1}]))/binary, Enc>>
 	end.
 
--spec default_parse_options() -> parse_options().
-default_parse_options() ->
+-spec default_decode_options() -> decode_options().
+default_decode_options() ->
 	#{separator => $,,
 	  enclosure => $",
 	  quote => $"}.
 
--spec default_write_options() -> write_options().
-default_write_options() ->
+-spec default_encode_options() -> encode_options().
+default_encode_options() ->
 	#{separator => $,,
 	  enclosure => $",
 	  quote => $",
 	  enclose => optional,
 	  end_of_line => <<$\r, $\n>>}.
 
-validate_parse_opts(#{separator:=Sep, enclosure:=Enc, quote:=Quot}=Opts) ->
+validate_decode_opts(#{separator:=Sep, enclosure:=Enc, quote:=Quot}=Opts) ->
 	case
        			validate_separator(Sep)
 		andalso validate_enclosure(Enc, Quot)
@@ -234,10 +223,10 @@ validate_parse_opts(#{separator:=Sep, enclosure:=Enc, quote:=Quot}=Opts) ->
 		false ->
 			error({badopts, Opts})
 	end;
-validate_parse_opts(Opts) ->
+validate_decode_opts(Opts) ->
        	error({badopts, Opts}).
 
-validate_write_opts(#{separator:=Sep, enclosure:=Enc, quote:=Quot, enclose:=EncPolicy, end_of_line:=EOL}=Opts) ->
+validate_encode_opts(#{separator:=Sep, enclosure:=Enc, quote:=Quot, enclose:=EncPolicy, end_of_line:=EOL}=Opts) ->
 	case
 			validate_separator(Sep)
 		andalso validate_enclosure(EncPolicy, Enc, Quot)
@@ -248,7 +237,7 @@ validate_write_opts(#{separator:=Sep, enclosure:=Enc, quote:=Quot, enclose:=EncP
 		false ->
 			error({badopts, Opts})
 	end;
-validate_write_opts(Opts) ->
+validate_encode_opts(Opts) ->
 	error({badopts, Opts}).
 
 validate_separator($,) -> true;
