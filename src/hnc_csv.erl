@@ -51,7 +51,7 @@
 -export_type([state/0]).
 
 %% @equiv decode(RawData, default_decode_options())
--spec decode(RawData :: data()) -> {Lines :: [csv_line()], Rest :: data()}.
+-spec decode(RawData :: data()) -> Lines :: [csv_line()].
 decode(Data) ->
 	decode(Data, default_decode_options()).
 
