@@ -35,6 +35,9 @@
 -export([encode/1, encode/2]).
 -export([default_encode_options/0]).
 
+-export([get_binary_provider/1, get_binary_provider/2]).
+-export([get_file_provider/1, get_file_provider/2]).
+
 -type data() :: binary().
 
 -type csv_field() :: binary().
@@ -50,6 +53,8 @@
 			   'quote' := 'undefined' | $\\ | $" | $',
 			   'enclose' := 'never' | 'always' | 'optional',
 			   'end_of_line' := binary()}.
+
+-type provider() :: fun(() -> 'end_of_data' | {data(), provider()}).
 
 -opaque state() :: fun(('flush' | data()) -> {'end_of_data' | csv_line(), state()}).
 
@@ -197,13 +202,13 @@ do_decode_eol(More, Opts, FieldAcc, LineAcc) ->
 			do_decode(undefined, <<More/binary, Data/binary>>, Opts, <<>>, [])
 	 end}.
 
-decode_fold(ProducerFun, FoldFun, Acc0) ->
-	decode_fold(ProducerFun, default_decode_options(), FoldFun, Acc0).
+decode_fold(Provider, FoldFun, Acc0) ->
+	decode_fold(Provider, default_decode_options(), FoldFun, Acc0).
 
-decode_fold(ProducerFun, Opts, FoldFun, Acc0) when is_function(ProducerFun, 0),
-						   is_function(FoldFun, 2) ->
+decode_fold(Provider, Opts, FoldFun, Acc0) when is_function(Provider, 0),
+						is_function(FoldFun, 2) ->
 	ok = validate_decode_opts(Opts),
-	decode_fold1(ProducerFun(), decode_init(Opts), FoldFun, Acc0).
+	decode_fold1(Provider(), decode_init(Opts), FoldFun, Acc0).
 
 decode_fold1(end_of_data, State, FoldFun, Acc) ->
 	case decode_flush(State) of
@@ -212,27 +217,27 @@ decode_fold1(end_of_data, State, FoldFun, Acc) ->
 		{Line, _} ->
 			FoldFun(Line, Acc)
 	end;
-decode_fold1({MoreData, ProducerFun}, State, FoldFun, Acc) ->
-	decode_fold2(ProducerFun, decode_add_data(State, MoreData), FoldFun, Acc).
+decode_fold1({MoreData, Provider}, State, FoldFun, Acc) ->
+	decode_fold2(Provider, decode_add_data(State, MoreData), FoldFun, Acc).
 
-decode_fold2(ProducerFun, State0, FoldFun, Acc0) ->
+decode_fold2(Provider, State0, FoldFun, Acc0) ->
 	case decode_next_line(State0) of
 		{end_of_data, State1} ->
-			decode_fold1(ProducerFun(), State1, FoldFun, Acc0);
+			decode_fold1(Provider(), State1, FoldFun, Acc0);
 		{Line, State1} ->
-			decode_fold2(ProducerFun, State1, FoldFun, FoldFun(Line, Acc0))
+			decode_fold2(Provider, State1, FoldFun, FoldFun(Line, Acc0))
 	end.
 
-decode_foreach(ProducerFun, Fun) ->
-	decode_foreach(ProducerFun, default_decode_options(), Fun).
+decode_foreach(Provider, Fun) ->
+	decode_foreach(Provider, default_decode_options(), Fun).
 
-decode_foreach(ProducerFun, Opts, Fun) ->
-	decode_fold(ProducerFun, Opts, fun(Line, ok) -> Fun(Line), ok end, ok).
+decode_foreach(Provider, Opts, Fun) ->
+	decode_fold(Provider, Opts, fun(Line, ok) -> Fun(Line), ok end, ok).
 
-decode_filter(ProducerFun, FilterFun) ->
-	decode_filter(ProducerFun, default_decode_options(), FilterFun).
+decode_filter(Provider, FilterFun) ->
+	decode_filter(Provider, default_decode_options(), FilterFun).
 
-decode_filter(ProducerFun, Opts, FilterFun) ->
+decode_filter(Provider, Opts, FilterFun) ->
 	FoldFun = fun(Line, Acc) ->
 		case FilterFun(Line) of
 			true ->
@@ -241,18 +246,18 @@ decode_filter(ProducerFun, Opts, FilterFun) ->
 				Acc
 		end
 	end,
-	lists:reverse(decode_fold(ProducerFun, Opts, FoldFun, [])).
+	lists:reverse(decode_fold(Provider, Opts, FoldFun, [])).
 
-decode_map(ProducerFun, FilterFun) ->
-	decode_map(ProducerFun, default_decode_options(), FilterFun).
+decode_map(Provider, FilterFun) ->
+	decode_map(Provider, default_decode_options(), FilterFun).
 
-decode_map(ProducerFun, Opts, MapFun) ->
-	lists:reverse(decode_fold(ProducerFun, Opts, fun(Line, Acc) -> [MapFun(Line)|Acc] end, [])).
+decode_map(Provider, Opts, MapFun) ->
+	lists:reverse(decode_fold(Provider, Opts, fun(Line, Acc) -> [MapFun(Line)|Acc] end, [])).
 
-decode_filtermap(ProducerFun, FilterMapFun) ->
-	decode_filtermap(ProducerFun, default_decode_options(), FilterMapFun).
+decode_filtermap(Provider, FilterMapFun) ->
+	decode_filtermap(Provider, default_decode_options(), FilterMapFun).
 
-decode_filtermap(ProducerFun, Opts, FilterMapFun) ->
+decode_filtermap(Provider, Opts, FilterMapFun) ->
 	FoldFun = fun(Line, Acc) ->
 		case FilterMapFun(Line) of
 			true ->
@@ -263,7 +268,54 @@ decode_filtermap(ProducerFun, Opts, FilterMapFun) ->
 				Acc
 		end
 	end,
-	lists:reverse(decode_fold(ProducerFun, Opts, FoldFun, [])).
+	lists:reverse(decode_fold(Provider, Opts, FoldFun, [])).
+
+-spec get_binary_provider(Bin :: binary()) -> provider().
+get_binary_provider(Bin) when is_binary(Bin) ->
+	fun() -> {Bin, fun() -> end_of_data end} end.
+
+-spec get_binary_provider(Bin :: binary(), ChunkSize :: pos_integer()) -> provider().
+get_binary_provider(Bin, ChunkSize) when is_binary(Bin),
+					 is_integer(ChunkSize), ChunkSize > 0 ->
+	fun() -> binary_provider(Bin, ChunkSize) end.
+
+binary_provider(<<>>, _ChunkSize) ->
+	end_of_data;
+binary_provider(Bin, ChunkSize) ->
+	case Bin of
+		<<Data:ChunkSize/binary, More/binary>> ->
+			{Data, fun() -> binary_provider(More, ChunkSize) end};
+		Data ->
+			{Data, fun() -> end_of_data end}
+	end.
+
+%% @equiv get_file_provider(Filename, 1024)
+-spec get_file_provider(Filename :: file:name_all()) -> provider().
+get_file_provider(Filename) ->
+	get_file_provider(Filename, 1024).
+
+-spec get_file_provider(Filename :: file:name_all(), ChunkSize :: pos_integer()) -> provider().
+get_file_provider(Filename, ChunkSize) when is_integer(ChunkSize), ChunkSize > 0 ->
+	{ok, Io} = file:open(Filename, [read, binary]),
+	fun() -> file_provider(Io, ChunkSize) end.
+
+file_provider(Io, ChunkSize) ->
+	try
+		file:read(Io, ChunkSize)
+	of
+		eof ->
+			_ = file:close(Io),
+			end_of_data;
+		{ok, Data} ->
+			{Data, fun() -> file_provider(Io, ChunkSize) end};
+		{error, Reason} ->
+			_ = file:close(Io),
+			error(Reason)
+	catch
+		C:E:ST ->
+			_ = file:close(Io),
+			erlang:raise(C, E, ST)
+	end.
 
 %% @equiv encode(Lines, default_encode_options())
 -spec encode(Lines :: [csv_line()]) -> RawData :: data().
