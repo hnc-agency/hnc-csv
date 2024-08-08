@@ -25,6 +25,11 @@
 -export([decode_add_data/2]).
 -export([decode_next_line/1]).
 -export([decode_flush/1]).
+-export([decode_fold/3, decode_fold/4]).
+-export([decode_foreach/2, decode_foreach/3]).
+-export([decode_filter/2, decode_filter/3]).
+-export([decode_map/2, decode_map/3]).
+-export([decode_filtermap/2, decode_filtermap/3]).
 -export([default_decode_options/0]).
 
 -export([encode/1, encode/2]).
@@ -191,6 +196,74 @@ do_decode_eol(More, Opts, FieldAcc, LineAcc) ->
 		(Data) ->
 			do_decode(undefined, <<More/binary, Data/binary>>, Opts, <<>>, [])
 	 end}.
+
+decode_fold(ProducerFun, FoldFun, Acc0) ->
+	decode_fold(ProducerFun, default_decode_options(), FoldFun, Acc0).
+
+decode_fold(ProducerFun, Opts, FoldFun, Acc0) when is_function(ProducerFun, 0),
+						   is_function(FoldFun, 2) ->
+	ok = validate_decode_opts(Opts),
+	decode_fold1(ProducerFun(), decode_init(Opts), FoldFun, Acc0).
+
+decode_fold1(end_of_data, State, FoldFun, Acc) ->
+	case decode_flush(State) of
+		{undefined, _} ->
+			Acc;
+		{Line, _} ->
+			FoldFun(Line, Acc)
+	end;
+decode_fold1({MoreData, ProducerFun}, State, FoldFun, Acc) ->
+	decode_fold2(ProducerFun, decode_add_data(State, MoreData), FoldFun, Acc).
+
+decode_fold2(ProducerFun, State0, FoldFun, Acc0) ->
+	case decode_next_line(State0) of
+		{end_of_data, State1} ->
+			decode_fold1(ProducerFun(), State1, FoldFun, Acc0);
+		{Line, State1} ->
+			decode_fold2(ProducerFun, State1, FoldFun, FoldFun(Line, Acc0))
+	end.
+
+decode_foreach(ProducerFun, Fun) ->
+	decode_foreach(ProducerFun, default_decode_options(), Fun).
+
+decode_foreach(ProducerFun, Opts, Fun) ->
+	decode_fold(ProducerFun, Opts, fun(Line, ok) -> Fun(Line), ok end, ok).
+
+decode_filter(ProducerFun, FilterFun) ->
+	decode_filter(ProducerFun, default_decode_options(), FilterFun).
+
+decode_filter(ProducerFun, Opts, FilterFun) ->
+	FoldFun = fun(Line, Acc) ->
+		case FilterFun(Line) of
+			true ->
+				[Line|Acc];
+			false ->
+				Acc
+		end
+	end,
+	lists:reverse(decode_fold(ProducerFun, Opts, FoldFun, [])).
+
+decode_map(ProducerFun, FilterFun) ->
+	decode_map(ProducerFun, default_decode_options(), FilterFun).
+
+decode_map(ProducerFun, Opts, MapFun) ->
+	lists:reverse(decode_fold(ProducerFun, Opts, fun(Line, Acc) -> [MapFun(Line)|Acc] end, [])).
+
+decode_filtermap(ProducerFun, FilterMapFun) ->
+	decode_filtermap(ProducerFun, default_decode_options(), FilterMapFun).
+
+decode_filtermap(ProducerFun, Opts, FilterMapFun) ->
+	FoldFun = fun(Line, Acc) ->
+		case FilterMapFun(Line) of
+			true ->
+				[Line|Acc];
+			{true, V} ->
+				[V|Acc];
+			false ->
+				Acc
+		end
+	end,
+	lists:reverse(decode_fold(ProducerFun, Opts, FoldFun, [])).
 
 %% @equiv encode(Lines, default_encode_options())
 -spec encode(Lines :: [csv_line()]) -> RawData :: data().
