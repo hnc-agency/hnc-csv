@@ -72,29 +72,20 @@ decode(Data) ->
 %%      which in turn are binaries representing the CSV field values.
 -spec decode(RawData :: data(), Options :: decode_options()) -> Lines :: [csv_line()].
 decode(Data, Opts) when is_binary(Data), is_map(Opts) ->
-	decode1(decode_init(Data, Opts), []).
-
-decode1(Cont, Acc) ->
-	decode2(decode_next_line(Cont), Acc).
-
-decode2({end_of_data, Cont}, Acc) ->
-	decode3(decode_flush(Cont), Acc);
-decode2({Line, Cont}, Acc) ->
-	decode1(Cont, [Line|Acc]).
-
-decode3({undefined, _}, Acc) ->
-	lists:reverse(Acc);
-decode3({LastLine, _}, Acc) ->
-	lists:reverse([LastLine|Acc]).
+	lists:reverse(
+		decode_fold(get_binary_provider(Data),
+			    Opts,
+			    fun(Line, Acc) -> [Line|Acc] end,
+			    [])).
 
 %% @equiv decode_init(<<>>, default_decode_options())
 -spec decode_init() -> State :: state().
 decode_init() ->
 	decode_init(<<>>, default_decode_options()).
 
-%% @doc Equivalent to {@link decode_init/2. `decode_init(Data, default_decode_options())'}
-%%      or {@link decode_init/2. `decode_init(<<>>, Options)'}, respectively.
--spec decode_init(DataOrOptions :: (data() | decode_options())) -> State :: state().
+%% @doc Equivalent to {@link decode_init/2. decode_init(Data, default_decode_options())}
+%%      or {@link decode_init/2. decode_init(&lt;&lt;&gt;&gt;, Options)}, respectively.
+-spec decode_init(DataOrOptions :: data() | decode_options()) -> State :: state().
 decode_init(Data) when is_binary(Data) ->
 	decode_init(Data, default_decode_options());
 decode_init(Opts) when is_map(Opts) ->
@@ -202,64 +193,143 @@ do_decode_eol(More, Opts, FieldAcc, LineAcc) ->
 			do_decode(undefined, <<More/binary, Data/binary>>, Opts, <<>>, [])
 	 end}.
 
-decode_fold(Provider, FoldFun, Acc0) ->
-	decode_fold(Provider, default_decode_options(), FoldFun, Acc0).
+%% @equiv decode_fold(Provider, default_decode_options(), Fun, Acc0)
+-spec decode_fold(Provider, Fun, Acc0) -> Acc1 when
+	  Provider :: provider(),
+	  Fun :: fun((Line, AccIn) -> AccOut),
+	  Line :: csv_line(),
+	  Acc0 :: term(),
+	  Acc1 :: term(),
+	  AccIn :: term(),
+	  AccOut :: term().
+decode_fold(Provider, Fun, Acc0) ->
+	decode_fold(Provider, default_decode_options(), Fun, Acc0).
 
-decode_fold(Provider, Opts, FoldFun, Acc0) when is_function(Provider, 0),
-						is_function(FoldFun, 2) ->
+-spec decode_fold(Provider, Options, Fun, Acc0) -> Acc1 when
+	  Provider :: provider(),
+	  Options :: decode_options(),
+	  Fun :: fun((Line, AccIn) -> AccOut),
+	  Line :: csv_line(),
+	  Acc0 :: term(),
+	  Acc1 :: term(),
+	  AccIn :: term(),
+	  AccOut :: term().
+decode_fold(Provider, Opts, Fun, Acc0) when is_function(Provider, 0),
+					    is_function(Fun, 2) ->
 	ok = validate_decode_opts(Opts),
-	decode_fold1(Provider(), decode_init(Opts), FoldFun, Acc0).
+	decode_fold1(Provider(), decode_init(Opts), Fun, Acc0).
 
-decode_fold1(end_of_data, State, FoldFun, Acc) ->
+decode_fold1(end_of_data, State, Fun, Acc) ->
 	case decode_flush(State) of
 		{undefined, _} ->
 			Acc;
 		{Line, _} ->
-			FoldFun(Line, Acc)
+			Fun(Line, Acc)
 	end;
-decode_fold1({MoreData, Provider}, State, FoldFun, Acc) ->
-	decode_fold2(Provider, decode_add_data(State, MoreData), FoldFun, Acc).
+decode_fold1({MoreData, Provider}, State, Fun, Acc) ->
+	decode_fold2(Provider, decode_add_data(State, MoreData), Fun, Acc).
 
-decode_fold2(Provider, State0, FoldFun, Acc0) ->
+decode_fold2(Provider, State0, Fun, Acc0) ->
 	case decode_next_line(State0) of
 		{end_of_data, State1} ->
-			decode_fold1(Provider(), State1, FoldFun, Acc0);
+			decode_fold1(Provider(), State1, Fun, Acc0);
 		{Line, State1} ->
-			decode_fold2(Provider, State1, FoldFun, FoldFun(Line, Acc0))
+			decode_fold2(Provider, State1, Fun, Fun(Line, Acc0))
 	end.
 
+%% @equiv decode_foreach(Provider, default_decode_options(), Fun)
+-spec decode_foreach(Provider, Fun) -> ok when
+	  Provider :: provider(),
+	  Fun :: fun((Line) -> _),
+	  Line :: csv_line().
 decode_foreach(Provider, Fun) ->
 	decode_foreach(Provider, default_decode_options(), Fun).
 
+-spec decode_foreach(Provider, Options, Fun) -> ok when
+	  Provider :: provider(),
+	  Options :: decode_options(),
+	  Fun :: fun((Line) -> _),
+	  Line :: csv_line().
 decode_foreach(Provider, Opts, Fun) ->
-	decode_fold(Provider, Opts, fun(Line, ok) -> Fun(Line), ok end, ok).
+	decode_fold(Provider,
+		    Opts,
+		    fun(Line, ok) -> Fun(Line), ok end,
+		    ok).
 
-decode_filter(Provider, FilterFun) ->
-	decode_filter(Provider, default_decode_options(), FilterFun).
+%% @equiv decode_filter(Provider, default_decode_options(), Fun)
+-spec decode_filter(Provider, Fun) -> Lines when
+	  Provider :: provider(),
+	  Fun :: fun((Line) -> boolean()),
+	  Line :: csv_line(),
+	  Lines :: [csv_line()].
+decode_filter(Provider, Fun) ->
+	decode_filter(Provider, default_decode_options(), Fun).
 
-decode_filter(Provider, Opts, FilterFun) ->
+-spec decode_filter(Provider, Options, Fun) -> Lines when
+	  Provider :: provider(),
+	  Options :: decode_options(),
+	  Fun :: fun((Line) -> boolean()),
+	  Line :: csv_line(),
+	  Lines :: [csv_line()].
+decode_filter(Provider, Opts, Fun) ->
 	FoldFun = fun(Line, Acc) ->
-		case FilterFun(Line) of
+		case Fun(Line) of
 			true ->
 				[Line|Acc];
 			false ->
 				Acc
 		end
 	end,
-	lists:reverse(decode_fold(Provider, Opts, FoldFun, [])).
+	lists:reverse(
+		decode_fold(Provider,
+			    Opts,
+			    FoldFun,
+			    [])).
 
-decode_map(Provider, FilterFun) ->
-	decode_map(Provider, default_decode_options(), FilterFun).
+%% @equiv decode_map(Provider, default_decode_options(), Fun)
+-spec decode_map(Provider, Fun) -> Result when
+	  Provider :: provider(),
+	  Fun :: fun((Line) -> Mapped),
+	  Line :: csv_line(),
+	  Mapped :: term(),
+	  Result :: [Mapped].
+decode_map(Provider, Fun) ->
+	decode_map(Provider, default_decode_options(), Fun).
 
-decode_map(Provider, Opts, MapFun) ->
-	lists:reverse(decode_fold(Provider, Opts, fun(Line, Acc) -> [MapFun(Line)|Acc] end, [])).
+-spec decode_map(Provider, Options, Fun) -> Result when
+	  Provider :: provider(),
+	  Options :: decode_options(),
+	  Fun :: fun((Line) -> Mapped),
+	  Line :: csv_line(),
+	  Mapped :: term(),
+	  Result :: [Mapped].
+decode_map(Provider, Opts, Fun) ->
+	lists:reverse(
+		decode_fold(Provider,
+			    Opts,
+			    fun(Line, Acc) -> [Fun(Line)|Acc] end,
+			    [])).
 
-decode_filtermap(Provider, FilterMapFun) ->
-	decode_filtermap(Provider, default_decode_options(), FilterMapFun).
+%% @equiv decode_filtermap(Provider, default_decode_options(), Fun)
+-spec decode_filtermap(Provider, Fun) -> Result when
+	  Provider :: provider(),
+	  Fun :: fun((Line) -> boolean() | {'true', Mapped}),
+	  Line :: csv_line(),
+	  Mapped :: term(),
+	  Result :: [Line | Mapped].
+decode_filtermap(Provider, Fun) ->
+	decode_filtermap(Provider, default_decode_options(), Fun).
 
-decode_filtermap(Provider, Opts, FilterMapFun) ->
+-spec decode_filtermap(Provider, Options, Fun) -> Result when
+	  Provider :: provider(),
+	  Options :: decode_options(),
+	  Fun :: fun((Line) -> boolean() | {'true', Mapped}),
+	  Line :: csv_line(),
+	  Mapped :: term(),
+	  Result :: [Line | Mapped].
+decode_filtermap(Provider, Opts, Fun) ->
 	FoldFun = fun(Line, Acc) ->
-		case FilterMapFun(Line) of
+		case Fun(Line) of
 			true ->
 				[Line|Acc];
 			{true, V} ->
@@ -268,12 +338,26 @@ decode_filtermap(Provider, Opts, FilterMapFun) ->
 				Acc
 		end
 	end,
-	lists:reverse(decode_fold(Provider, Opts, FoldFun, [])).
+	lists:reverse(
+		decode_fold(Provider,
+			    Opts,
+			    FoldFun,
+			    [])).
 
+%% @equiv get_binary_provider(Bin, 1024)
 -spec get_binary_provider(Bin :: binary()) -> provider().
 get_binary_provider(Bin) when is_binary(Bin) ->
-	fun() -> {Bin, fun() -> end_of_data end} end.
+	get_binary_provider(Bin, 1024).
 
+%% @doc Creates a data provider from the given binary `Bin' to supply
+%%      data in chunks of the given `ChunkSize'.
+%%
+%%      This provider can be used in
+%%      {@link decode_fold/4. `decode_fold/3,4'},
+%%      {@link decode_foreach/3. `decode_foreach/2,3'},
+%%      {@link decode_filter/3. `decode_filter/2,3'},
+%%      {@link decode_map/3. `decode_map/2,3'} and
+%%      {@link decode_filtermap/3. `decode_filtermap/2,3'}.
 -spec get_binary_provider(Bin :: binary(), ChunkSize :: pos_integer()) -> provider().
 get_binary_provider(Bin, ChunkSize) when is_binary(Bin),
 					 is_integer(ChunkSize), ChunkSize > 0 ->
@@ -294,6 +378,16 @@ binary_provider(Bin, ChunkSize) ->
 get_file_provider(Filename) ->
 	get_file_provider(Filename, 1024).
 
+%% @doc Creates a data provider from the file given in
+%%      `Filename' to supply data in chunks of the given
+%%      `ChunkSize'.
+%%
+%%      This provider can be used in
+%%      {@link decode_fold/4. `decode_fold/3,4'},
+%%      {@link decode_foreach/3. `decode_foreach/2,3'},
+%%      {@link decode_filter/3. `decode_filter/2,3'},
+%%      {@link decode_map/3. `decode_map/2,3'} and
+%%      {@link decode_filtermap/3. `decode_filtermap/2,3'}.
 -spec get_file_provider(Filename :: file:name_all(), ChunkSize :: pos_integer()) -> provider().
 get_file_provider(Filename, ChunkSize) when is_integer(ChunkSize), ChunkSize > 0 ->
 	{ok, Io} = file:open(Filename, [read, binary]),
