@@ -13,14 +13,14 @@ options, that is:
 
 `decode/2` allows using custom options:
 ```erlang
-#{separator => Separator, % $, (default), $; or $\t
-  enclosure => Enclosure, % $" (default), $' or 'undefined'
-  quote     => Quote}     % $" (default), $', $\\ or 'undefined'
+#{separator => Separator, % any byte except $\r or $\n (defaul $,)
+  enclosure => Enclosure, % 'undefined' or any byte except $\r or $\n (default $")
+  quote     => Quote}     % 'undefined' or any byte except $\r or $\n (defaults to same as enclosure)
 ```
 _Restrictions for option combinations:_
 * If `Enclosure` is `undefined` (ie, no enclosing), `Quote` must also be `undefined`.
-* If `Enclosure` is `$"`, `Quote` can be `$"` or `$\\`.
-* If `Enclosure` is `$'`, `Quote` can be `$'` or `$\\`.
+* If `Enclosure` is not `undefined`, `Quote` must also not be `undefined`.
+* If `Enclosure` is not `undefined`, it must not be the same as `Separator`.
 
 Lines are separated by `\r`, `\n` or `\r\n`. Empty lines are ignored by the decoder.
 
@@ -142,17 +142,16 @@ options, that is:
 
 `encode/2` allows using custom options:
 ```erlang
-#{separator   => Separator, % $, (default), $; or $\t
-  enclosure   => Enclosure, % $" (default), $' or 'undefined'
-  quote       => Quote,     % $" (default), $', $\\ or 'undefined'
-  enclose     => Enclose,   % 'optionally' (default), 'never' or 'always'
+#{separator   => Separator, % any byte except $\r and $\n (default $,)
+  enclosure   => Enclosure, % 'undefined' or any byte except $\r or $\n (default $")
+  quote       => Quote,     % 'undefined' or any byte except $\r or $\n (defaults to same as enclosure)
+  enclose     => Enclose,   % 'optional' (default), 'never' or 'always'
   end_of_line => EndOfLine} % `<<"\r\n">> (default), <<"\n">> or <<"\r">>
 ```
 _Restrictions for option combinations:_
 * If `Enclose` is `never` (ie, no enclosing), both `Enclosure` and `Quote` must be `undefined`.
-* If `Enclose` is `optionally` or `always`, `Enclosure` and `Quote` must not be `undefined`.
-* If `Enclosure` is `$"`, `Quote` can be `$"` or `$\\`.
-* If `Enclosure` is `$'`, `Quote` can be `$'` or `$\\`.
+* If `Enclose` is `optional` or `always`, `Enclosure` and `Quote` must not be `undefined`.
+* If `Enclosure` is not `undefined`, it must not be the same as `Separator`.
 
 The input for encoding is a list of CSV lines, which are in turn lists of CSV fields,
 which are in turn binaries representing the field values.

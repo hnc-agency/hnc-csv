@@ -1,5 +1,5 @@
-%% Copyright (c) 2024, Maria Scott <maria-12648430@hnc-agency.org>
-%% Copyright (c) 2024, Jan Uhlig <juhlig@hnc-agency.org>
+%% Copyright (c) 2024-2025, Maria Scott <maria-12648430@hnc-agency.org>
+%% Copyright (c) 2024-2025, Jan Uhlig <juhlig@hnc-agency.org>
 %% 
 %% Permission to use, copy, modify, and/or distribute this software for any
 %% purpose with or without fee is hereby granted, provided that the above
@@ -44,13 +44,13 @@
 
 -type csv_line() :: [csv_field()].
 
--type decode_options() :: #{'separator' := $, | $; | $\t,
-			    'enclosure' := 'undefined' | $" | $',
-			    'quote' := 'undefined' | $\\ | $" | $'}.
+-type decode_options() :: #{'separator' := byte(),
+			    'enclosure' := 'undefined' | byte(),
+			    'quote' := 'undefined' | byte()}.
 
--type encode_options() :: #{'separator' := $, | $; | $\t,
-			   'enclosure' := 'undefined' | $" | $',
-			   'quote' := 'undefined' | $\\ | $" | $',
+-type encode_options() :: #{'separator' := byte(),
+			   'enclosure' := 'undefined' | byte(),
+			   'quote' := 'undefined' | byte(),
 			   'enclose' := 'never' | 'always' | 'optional',
 			   'end_of_line' := binary()}.
 
@@ -102,8 +102,8 @@ decode_init(Opts) when is_map(Opts) ->
 %% @see decode_next_line/1
 %% @see decode_flush/1
 -spec decode_init(RawData :: data(), Options :: decode_options()) -> State :: state().
-decode_init(Data, Opts) when is_binary(Data), is_map(Opts) ->
-	ok = validate_decode_opts(Opts),
+decode_init(Data, Opts0) when is_binary(Data), is_map(Opts0) ->
+	Opts = validate_decode_opts(Opts0),
 	fun
 		(flush) ->
 			{undefined, Data};
@@ -220,9 +220,9 @@ decode_fold(Provider, Fun, Acc0) ->
 	  Acc1 :: term(),
 	  AccIn :: term(),
 	  AccOut :: term().
-decode_fold(Provider, Opts, Fun, Acc0) when is_function(Provider, 0),
-					    is_function(Fun, 2) ->
-	ok = validate_decode_opts(Opts),
+decode_fold(Provider, Opts0, Fun, Acc0) when is_function(Provider, 0),
+					     is_function(Fun, 2) ->
+	Opts = validate_decode_opts(Opts0),
 	decode_fold1(Provider(), decode_init(Opts), Fun, Acc0).
 
 decode_fold1(end_of_data, State, Fun, Acc) ->
@@ -436,8 +436,8 @@ encode(Lines) ->
 
 %% @doc Encodes the given CSV data structure into a CSV binary, using the given `Options'.
 -spec encode(Lines :: [csv_line()], Options :: encode_options()) -> RawData :: data().
-encode(Lines, Opts) ->
-	ok = validate_encode_opts(Opts),
+encode(Lines, Opts0) ->
+	Opts = validate_encode_opts(Opts0),
 	encode(Lines, Opts, undefined).
 
 encode([], _Opts, undefined) ->
@@ -499,7 +499,7 @@ default_decode_options() ->
 %%   <li>`separator': `$,'</li>
 %%   <li>`enclosure': `$"'</li>
 %%   <li>`quote': `$"'</li>
-%%   <li>`encode': `optionally'</li>
+%%   <li>`enclose': `optional'</li>
 %%   <li>`end_of_line': `<<"\r\n">>'</li>
 %% </ul>
 -spec default_encode_options() -> encode_options().
@@ -514,12 +514,19 @@ validate_decode_opts(#{separator:=Sep, enclosure:=Enc, quote:=Quot}=Opts) ->
 	case
        			validate_separator(Sep)
 		andalso validate_enclosure(Enc, Quot)
+		andalso Sep=/=Enc
 	of
 		true ->
-			ok;
+			Opts;
 		false ->
 			error({badopts, Opts})
 	end;
+validate_decode_opts(Opts) when not is_map_key(separator, Opts) ->
+	validate_decode_opts(Opts#{separator => $,});
+validate_decode_opts(Opts) when not is_map_key(enclosure, Opts) ->
+	validate_decode_opts(Opts#{enclosure => $"});
+validate_decode_opts(#{enclosure:=Enc}=Opts) when not is_map_key(quote, Opts) ->
+	validate_decode_opts(Opts#{quote => Enc});
 validate_decode_opts(Opts) ->
        	error({badopts, Opts}).
 
@@ -528,36 +535,49 @@ validate_encode_opts(#{separator:=Sep, enclosure:=Enc, quote:=Quot, enclose:=Enc
 			validate_separator(Sep)
 		andalso validate_enclosure(EncPolicy, Enc, Quot)
 		andalso validate_end_of_line(EOL)
+		andalso Sep=/=Enc
 	of
 		true ->
-			ok;
+			Opts;
 		false ->
 			error({badopts, Opts})
 	end;
+validate_encode_opts(Opts) when not is_map_key(separator, Opts) ->
+	validate_encode_opts(Opts#{separator => $,});
+validate_encode_opts(Opts) when not is_map_key(enclosure, Opts) ->
+	validate_encode_opts(Opts#{enclosure => $"});
+validate_encode_opts(#{enclosure:=Enc}=Opts) when not is_map_key(quote, Opts) ->
+	validate_encode_opts(Opts#{quote => Enc});
+validate_encode_opts(Opts) when not is_map_key(enclose, Opts) ->
+	validate_encode_opts(Opts#{enclose => optional});
+validate_encode_opts(Opts) when not is_map_key(end_of_line, Opts) ->
+	validate_encode_opts(Opts#{end_of_line => <<$\r, $\n>>});
 validate_encode_opts(Opts) ->
 	error({badopts, Opts}).
 
-validate_separator($,) -> true;
-validate_separator($;) -> true;
-validate_separator($\t) -> true;
+validate_separator($\r) -> false;
+validate_separator($\n) -> false;
+validate_separator(C) when is_integer(C), C>=16#00, C=<16#FF -> true;
 validate_separator(_) -> false.
 
 validate_enclosure(undefined, undefined) -> true;
-validate_enclosure($", $") -> true;
-validate_enclosure($', $') -> true;
-validate_enclosure($", $\\) -> true;
-validate_enclosure($', $\\) -> true;
+validate_enclosure($\r, _) -> false;
+validate_enclosure($\n, _) -> false;
+validate_enclosure(_, $\r) -> false;
+validate_enclosure(_, $\n) -> false;
+validate_enclosure(Enc, Quot) when is_integer(Enc), Enc>=16#00, Enc=<16#FF,
+				   is_integer(Quot), Quot>=16#00, Quot=<16#FF -> true;
 validate_enclosure(_, _) -> false.
 
 validate_enclosure(never, undefined, undefined) -> true;
-validate_enclosure(optional, $", $") -> true;
-validate_enclosure(optional, $', $') -> true;
-validate_enclosure(optional, $", $\\) -> true;
-validate_enclosure(optional, $', $\\) -> true;
-validate_enclosure(always, $", $") -> true;
-validate_enclosure(always, $', $') -> true;
-validate_enclosure(always, $", $\\) -> true;
-validate_enclosure(always, $', $\\) -> true;
+validate_enclosure(_, $\r, _) -> false;
+validate_enclosure(_, $\n, _) -> false;
+validate_enclosure(_, _, $\r) -> false;
+validate_enclosure(_, _, $\n) -> false;
+validate_enclosure(optional, Enc, Quot) when is_integer(Enc), Enc>=16#00, Enc=<16#FF,
+					     is_integer(Quot), Quot>=16#00, Quot=<16#FF -> true;
+validate_enclosure(always, Enc, Quot) when is_integer(Enc), Enc>=16#00, Enc=<16#FF,
+					   is_integer(Quot), Quot>=16#00, Quot=<16#FF -> true;
 validate_enclosure(_, _, _) -> false.
 
 validate_end_of_line(<<$\r, $\n>>) -> true;
