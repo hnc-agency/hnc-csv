@@ -15,10 +15,10 @@ options, that is:
 ```erlang
 #{separator => Separator, % any byte except $\r or $\n (defaul $,)
   enclosure => Enclosure, % 'undefined' or any byte except $\r or $\n (default $")
-  quote     => Quote}     % 'undefined' or any byte except $\r or $\n (defaults to same as enclosure)
+  quote     => Quote}     % 'undefined', 'enclosure', or any byte except $\r or $\n (defaults 'enclosure')
 ```
 _Restrictions for option combinations:_
-* If `Enclosure` is `undefined` (ie, no enclosing), `Quote` must also be `undefined`.
+* If `Enclosure` is `undefined` (ie, no enclosing), `Quote` must be `enclosure` or `undefined`.
 * If `Enclosure` is not `undefined`, `Quote` must also not be `undefined`.
 * If `Enclosure` is not `undefined`, it must not be the same as `Separator`.
 
@@ -144,12 +144,12 @@ options, that is:
 ```erlang
 #{separator   => Separator, % any byte except $\r and $\n (default $,)
   enclosure   => Enclosure, % 'undefined' or any byte except $\r or $\n (default $")
-  quote       => Quote,     % 'undefined' or any byte except $\r or $\n (defaults to same as enclosure)
+  quote       => Quote,     % 'undefined', 'enclosure', or any byte except $\r or $\n (default 'enclosure')
   enclose     => Enclose,   % 'optional' (default), 'never' or 'always'
   end_of_line => EndOfLine} % `<<"\r\n">> (default), <<"\n">> or <<"\r">>
 ```
 _Restrictions for option combinations:_
-* If `Enclose` is `never` (ie, no enclosing), both `Enclosure` and `Quote` must be `undefined`.
+* If `Enclose` is `never` (ie, no enclosing), `Enclosure` must be `undefined` and `Quote` must be `undefined` or `enclosure`.
 * If `Enclose` is `optional` or `always`, `Enclosure` and `Quote` must not be `undefined`.
 * If `Enclosure` is not `undefined`, it must not be the same as `Separator`.
 
