@@ -18,14 +18,14 @@ options, that is:
   quote     => Quote}     % 'undefined', 'enclosure', or any byte except $\r or $\n (defaults 'enclosure')
 ```
 _Restrictions for option combinations:_
-* If `Enclosure` is `undefined` (ie, no enclosing), `Quote` must be `enclosure` or `undefined`.
-* If `Enclosure` is not `undefined`, `Quote` must also not be `undefined`.
-* If `Enclosure` is not `undefined`, it must not be the same as `Separator`.
+* If `Enclosure` is `undefined` (ie, no enclosing), `Quote` must be either `enclosure` or `undefined`.
+* If `Enclosure` is _not_ `undefined`, `Quote` must also not be `undefined`.
+* If `Enclosure` is _not_ `undefined`, it must _not_ be the same as `Separator`.
 
 Lines are separated by `\r`, `\n` or `\r\n`. Empty lines are ignored by the decoder.
 
-The result of decoding is a list of CSV lines, which are in turn lists of CSV fields,
-which are in turn binaries representing the field values.
+The result of decoding is a list of CSV lines, which are lists of CSV fields,
+which are in turn binaries representing the field values on the respective line.
 
 #### Example
 
@@ -59,22 +59,37 @@ and `foreach/2`.
 
 In fact, `decode/1,2` is implemented via `decode_fold/3,4`.
 
-#### Providers
+### Providers
 
-Those functions take a `provider` as their first parameter. A provider
-here means a 0-arity function which, when called, returns either a tuple
-where the first element is a chunk of binary data and the second is
-a new provider function for the next chunk of data, or the atom
+The `decode` family of functions accepts both a raw binary as well as a
+`Provider` that delivers chunks of raw binary. When given a raw binary,
+it is converted into a binary provider for further processing.
+
+A provider is a 0-arity function which, when called, returns either a
+tuple where the first element is a chunk of binary data and the second
+is a new provider function for the next chunk of data, or the atom
 `end_of_data` to indicate that the provider has delivered all data.
 
+Providers can be implemented stateless of stateful, usually depending
+on the characteristics of the underlying data source.
+
+A stateless provider does not change and is not susceptible to external
+changes to the state of the underlying data source.
+
+A stateful provider on the other hand may change or be susceptible to
+changes to the state of the underlying data source or both. It is recommended
+to not (re-)use stateful providers or their underlying data source before, while
+or after being used in decoding functions, except for any necessary setup before or
+cleanup after being used.
+
 `hnc_csv` comes with two convenience functions, `get_binary_provider/1,2`
-and `get_file_provider/1,2` which return providers for binaries or
-files, respectively.
+(stateless) and `get_file_provider/1,2` (stateful) which return providers for
+binaries or files, respectively.
 
 ##### Example
 
-The following is an implementation of a provider which delivers data
-taken from a given list of binaries:
+The following is an implementation of a (stateless) custom provider which delivers
+data taken from a given list of binaries:
 ```erlang
 -module(example_provider).
 -export([get_list_provider/1]).
@@ -111,20 +126,16 @@ and fields in the CSV data which the provider delivers:
 ### Advanced Usage
 
 For more complex scenarios than what the built-in functions provide
-for, the functions `decode_init/0,1,2`, `decode_add_data/2`,
-`decode_next_line/1` and `decode_flush/1` can be used together to
-decode and process CSV documents.
+for, the functions `decode_init/0,1,2`, `decode_next_line/1` and
+`decode_flush/1` can be used together to decode and process CSV
+documents incrementally.
 
 * `decode_init/0,1,2` creates a decoder state to be used in the
   other functions listed above.
-* `decode_add_data/2` adds another chunk of unprocessed data to the
-  state and returns an updated state.
 * `decode_next_line/1` decodes and returns the next line, together with
-  an updated state. If the data in the state is exhausted, the atom
-  `end_of_data` is returned instead of a line.
-* `decode_flush/1` returns any as yet unfinished line in the given state,
-  together with any yet unprocessed data. If there is no unfinished line
-  in the state, the atom `undefined` is returned instead of a line.
+  an updated state. If the data in the provider backing the state is exhausted,
+  the atom `end_of_data` is returned instead of a line.
+* `decode_flush/1` returns all as by then unread lines in the given state.
 
 In fact, `decode_fold/4` is implemented using those functions.
 
@@ -150,25 +161,27 @@ options, that is:
 ```
 _Restrictions for option combinations:_
 * If `Enclose` is `never` (ie, no enclosing), `Enclosure` must be `undefined` and `Quote` must be `undefined` or `enclosure`.
-* If `Enclose` is `optional` or `always`, `Enclosure` and `Quote` must not be `undefined`.
-* If `Enclosure` is not `undefined`, it must not be the same as `Separator`.
+* If `Enclose` is `optional` or `always`, `Enclosure` and `Quote` must _not_ be `undefined`.
+* If `Enclosure` is _not_ `undefined`, it must not be the same as `Separator`.
 
 The input for encoding is a list of CSV lines, which are in turn lists of CSV fields,
 which are in turn binaries representing the field values.
 
-The result is a CSV binary document.
+The result is a CSV binary document consisting of the given CSV lines, in turn consisting of the given CSV fields of a line.
 
 #### Example
 
 Assume the following CSV structure:
 ```erlang
-1> Csv = [[<<"a">>,<<"b">>,<<"c">>],[<<"d,d">>,<<"e\"e">>,<<"f\r\nf">>]].
+1> Csv = [[<<"a">>,<<"b">>,<<"c">>],
+          [<<"d,d">>,<<"e\"e">>,<<"f\r\nf">>]].
 ```
 
 Encoded with `encode/1`, this will become:
 ```erlang
 2> hnc_csv:encode(Csv).
-<<"a,b,c\r\n\"d,d\",\"e\"\"e\",\"f\r\nf\"\r\n">>
+<<"a,b,c\r\n"
+  "\"d,d\",\"e\"\"e\",\"f\r\nf\"\r\n">>
 ```
 
 # Authors

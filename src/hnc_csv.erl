@@ -21,8 +21,7 @@
 -module(hnc_csv).
 
 -export([decode/1, decode/2]).
--export([decode_init/0, decode_init/1, decode_init/2]).
--export([decode_add_data/2]).
+-export([decode_init/1, decode_init/2]).
 -export([decode_next_line/1]).
 -export([decode_flush/1]).
 -export([decode_fold/3, decode_fold/4]).
@@ -35,6 +34,7 @@
 -export([encode/1, encode/2]).
 -export([default_encode_options/0]).
 
+-export([flush_provider/1]).
 -export([get_binary_provider/1, get_binary_provider/2]).
 -export([get_file_provider/1, get_file_provider/2]).
 
@@ -56,7 +56,7 @@
 
 -type provider() :: fun(() -> 'end_of_data' | {data(), provider()}).
 
--opaque state() :: fun(('flush' | data()) -> {'end_of_data' | csv_line(), state()}).
+-opaque state() :: fun(() -> 'end_of_data' | {csv_line(), state()}).
 
 -export_type([state/0]).
 
@@ -89,95 +89,114 @@ decode(ProviderOrData, Opts) ->
 			    fun(Line, Acc) -> [Line|Acc] end,
 			    [])).
 
-%% @equiv decode_init(<<>>, default_decode_options())
--spec decode_init() -> State when
-	  State :: state().
-decode_init() ->
-	decode_init(<<>>, default_decode_options()).
-
-%% @doc Equivalent to {@link decode_init/2. decode_init(RawData, default_decode_options())}
-%%      or {@link decode_init/2. decode_init(&lt;&lt;&gt;&gt;, Options)}, respectively.
--spec decode_init(RawDataOrOptions) -> State when
-	  RawDataOrOptions :: RawData | Options,
+%% @equiv decode_init(ProviderOrRawData, default_decode_options())
+-spec decode_init(ProviderOrRawData) -> State when
+	  ProviderOrRawData :: Provider | RawData,
+	  Provider :: provider(),
 	  RawData :: data(),
-	  Options :: decode_options(),
 	  State :: state().
-decode_init(Data) when is_binary(Data) ->
-	decode_init(Data, default_decode_options());
-decode_init(Opts) when is_map(Opts) ->
-	decode_init(<<>>, Opts).
+decode_init(ProviderOrData) ->
+	decode_init(ProviderOrData, default_decode_options()).
 
-%% @doc Creates a CSV decoder state, prepopulated with the given `RawData' and using
-%%      the given `Options'.
+%% @doc Creates a CSV decoder state to incrementally decode the raw CSV document in `RawData'
+%%      or provided by `Provider', using the given `Options'.
 %%
-%%      The return value can be used in the functions {@link decode_add_data/2},
-%%      {@link decode_next_line/1} and {@link decode_flush/1} to incrementally
-%%      decode a CSV document.
+%%      The return value can be used as argument to the function {@link decode_next_line/1}
+%%      to obtain CSV lines one by one.
 %%
-%% @see decode_add_data/2
 %% @see decode_next_line/1
-%% @see decode_flush/1
--spec decode_init(RawData, Options) -> State when
+-spec decode_init(ProviderOrRawData, Options) -> State when
+	  ProviderOrRawData :: Provider | RawData,
+	  Provider :: provider(),
 	  RawData :: data(),
 	  Options :: decode_options(),
 	  State :: state().
-decode_init(Data, Opts0) when is_binary(Data), is_map(Opts0) ->
+decode_init(Data, Opts) when is_binary(Data) ->
+	decode_init(get_binary_provider(Data), Opts);
+decode_init(Provider, Opts0) when is_function(Provider, 0), is_map(Opts0) ->
 	Opts = validate_decode_opts(Opts0),
-	fun
-		(flush) ->
-			{undefined, Data};
-		(MoreData) ->
-			do_decode(undefined, <<Data/binary, MoreData/binary>>, Opts, <<>>, [])
+	fun() ->
+		case Provider() of
+			end_of_data ->
+				end_of_data;
+			{Data, Provider1} ->
+				decode_init1(Provider1, Data, Opts)
+		end
+	end.
+
+decode_init1(Provider, Data, Opts) ->
+	case do_decode(undefined, Data, Opts, <<>>, []) of
+		{end_of_data, Cont} ->
+			decode_need_more_data(Provider, Cont);
+		{Line, Cont} ->
+			{Line, fun() -> decode_with_data(Provider, Cont) end}
+	end.
+
+decode_need_more_data(Provider, Cont) ->
+	case Provider() of
+		end_of_data ->
+			case Cont(flush) of
+				end_of_data ->
+					end_of_data;
+				Line ->
+					{Line, fun() -> end_of_data end}
+			end;
+		{Data, Provider1} ->
+			case Cont(Data) of
+				{end_of_data, Cont1} ->
+					decode_need_more_data(Provider1, Cont1);
+				{Line, Cont1} ->
+					{Line, fun() -> decode_with_data(Provider1, Cont1) end}
+			end
+	end.
+
+decode_with_data(Provider, Cont) ->
+	case Cont(<<>>) of
+		{end_of_data, Cont1} ->
+			decode_need_more_data(Provider, Cont1);
+		{Line, Cont1} ->
+			{Line, fun() -> decode_with_data(Provider, Cont1) end}
 	end.
 
 %% @doc Decodes and returns the next CSV line in the given decoder state, together with an updated
 %%      state which can be used for further incremental decoding.
 %%
-%%      If the decoder state is exhausted, the atom `end_of_data' is returned instead of a line. In
-%%      this case, the function {@link decode_add_data/2} can be used to add more data to the state,
-%%      or {@link decode_flush/1} can be used to flush a possibly unfinished line together with any
-%%      yet unprocessed data from the state.
-%%
-%% @see decode_add_data/2
-%% @see decode_flush/1
--spec decode_next_line(State0) -> {Result, State1} when
-	  State0 :: state(),
-	  Result :: 'end_of_data' | Line,
-	  Line :: csv_line(),
-	  State1 :: state().
-decode_next_line(Cont) when is_function(Cont, 1) ->
-	Cont(<<>>).
-
-%% @doc Adds another chunk of unprocessed `RawData' to the given decoder `State'.
-%%
-%%      Returns an updated state with the given data added.
--spec decode_add_data(State0, RawData) -> State1 when
-	  State0 :: state(),
-	  RawData :: data(),
-	  State1 :: state().
-decode_add_data(Cont, Data) ->
-	fun(MoreData) -> Cont(<<Data/binary, MoreData/binary>>) end.
-
-%% @doc Flushes a possibly unfinished line together with any yet unprocessed data from the state.
-%%
-%%      If there is no possibly unfinished line in the state, the atom `undefined' is returned
+%%      If the provider of the decoder state is exhausted, the atom `end_of_data' is returned
 %%      instead of a line.
--spec decode_flush(State) -> {Result, Rest} when
-	  State :: state(),
-	  Result :: 'undefined' | Line,
+-spec decode_next_line(State0) -> Result when
+	  State0 :: state(),
+	  Result :: 'end_of_data' | {Line, State1},
 	  Line :: csv_line(),
-	  Rest :: data().
-decode_flush(Cont) when is_function(Cont, 1) ->
-	Cont(flush).
+	  State1 :: state().
+decode_next_line(State) when is_function(State, 0) ->
+	State().
+
+%% @doc Reads and decodes any data remaining in the given CSV decoder state.
+%%
+%%      Returns a list of the remaining CSV lines.
+-spec decode_flush(State) -> Result when
+	  State :: state(),
+	  Result :: [Line],
+	  Line :: csv_line().
+decode_flush(State) when is_function(State, 0) ->
+	decode_flush1(State, []).
+
+decode_flush1(State, Acc) ->
+	case State() of
+		end_of_data ->
+			lists:reverse(Acc);
+		{Line, State1} ->
+			decode_flush1(State1, [Line|Acc])
+	end.
 
 do_decode(Mode, More, #{quote:=Quot}=Opts, FieldAcc, LineAcc) when More =:= <<>>;
 								   Mode =:= enclosed_field, More =:= <<Quot>> ->
 	{end_of_data,
 	 fun
 		(flush) when Mode=:=undefined ->
-			{undefined, More};
+			 end_of_data;
 		(flush) ->
-			{lists:reverse([<<FieldAcc/binary, More/binary>>|LineAcc]), <<>>};
+			lists:reverse([<<FieldAcc/binary, More/binary>>|LineAcc]);
 		(Data) ->
 			do_decode(Mode, <<More/binary, Data/binary>>, Opts, FieldAcc, LineAcc)
 	 end};
@@ -217,8 +236,6 @@ do_decode(enclosed_field, <<C, More/binary>>, Opts, FieldAcc, LineAcc) ->
 do_decode_eol(More, Opts, FieldAcc, LineAcc) ->
 	{lists:reverse([FieldAcc|LineAcc]),
 	 fun
-		(flush) ->
-			{undefined, More};
 		(Data) ->
 			do_decode(undefined, <<More/binary, Data/binary>>, Opts, <<>>, [])
 	 end}.
@@ -258,24 +275,14 @@ decode_fold(Data, Opts, Fun, Acc0) when is_binary(Data) ->
 	decode_fold(get_binary_provider(Data), Opts, Fun, Acc0);
 decode_fold(Provider, Opts, Fun, Acc0) when is_function(Provider, 0),
 					    is_function(Fun, 2) ->
-	decode_fold1(Provider(), decode_init(Opts), Fun, Acc0).
+	decode_fold1(decode_init(Provider, Opts), Fun, Acc0).
 
-decode_fold1(end_of_data, State, Fun, Acc) ->
-	case decode_flush(State) of
-		{undefined, _} ->
+decode_fold1(State, Fun, Acc) ->
+	case State() of
+		end_of_data ->
 			Acc;
-		{Line, _} ->
-			Fun(Line, Acc)
-	end;
-decode_fold1({MoreData, Provider}, State, Fun, Acc) ->
-	decode_fold2(Provider, decode_add_data(State, MoreData), Fun, Acc).
-
-decode_fold2(Provider, State0, Fun, Acc0) ->
-	case decode_next_line(State0) of
-		{end_of_data, State1} ->
-			decode_fold1(Provider(), State1, Fun, Acc0);
 		{Line, State1} ->
-			decode_fold2(Provider, State1, Fun, Fun(Line, Acc0))
+			decode_fold1(State1, Fun, Fun(Line, Acc))
 	end.
 
 %% @equiv decode_foreach(ProviderOrRawData, default_decode_options(), Fun)
@@ -390,6 +397,11 @@ decode_filtermap(ProviderOrData, Fun) ->
 	decode_filtermap(ProviderOrData, default_decode_options(), Fun).
 
 %% @doc Combines the functionality of `decode_filter' and `decode_map'.
+%%
+%%      If `Fun' returns `true' or `false' for a CSV line given to it,
+%%      the CSV line is kept or discarded from the result list (filtering).
+%%      If it returns `{true, Mapped}', `Mapped' is inserted in the result
+%%      list at the respective position (mapping).
 -spec decode_filtermap(ProviderOrRawData, Options, Fun) -> Result when
 	  ProviderOrRawData :: Provider | RawData,
 	  Provider :: provider(),
@@ -416,6 +428,21 @@ decode_filtermap(ProviderOrData, Opts, Fun) ->
 			    FoldFun,
 			    [])).
 
+%% @doc Flushes and returns all data remaining in the given `Provider'.
+-spec flush_provider(Provider) -> RawData when
+	  Provider :: provider(),
+	  RawData :: data().
+flush_provider(Provider) when is_function(Provider, 0) ->
+	flush_provider1(Provider, <<>>).
+
+flush_provider1(Provider, Acc) ->
+	case Provider() of
+		end_of_data ->
+			Acc;
+		{Data, Provider1} ->
+			flush_provider1(Provider1, <<Acc/binary, Data/binary>>)
+	end.
+
 %% @equiv get_binary_provider(Binary, 1024)
 -spec get_binary_provider(Binary) -> Provider when
 	  Binary :: binary(),
@@ -427,6 +454,7 @@ get_binary_provider(Bin) when is_binary(Bin) ->
 %%      data in chunks of the given `ChunkSize'.
 %%
 %%      This provider can be used in
+%%      {@link decode_init/2. `decode_init/1,2'}.
 %%      {@link decode_fold/4. `decode_fold/3,4'},
 %%      {@link decode_foreach/3. `decode_foreach/2,3'},
 %%      {@link decode_filter/3. `decode_filter/2,3'},
@@ -454,8 +482,8 @@ binary_provider(Bin, ChunkSize) ->
 -spec get_file_provider(IoDevice) -> Provider when
 	  IoDevice :: file:io_device() | io:device(),
 	  Provider :: provider().
-get_file_provider(Filename) ->
-	get_file_provider(Filename, 1024).
+get_file_provider(IoDevice) ->
+	get_file_provider(IoDevice, 1024).
 
 %% @doc Creates a data provider from an open file given in
 %%      `IoDevice' to supply data in chunks of the given
@@ -463,13 +491,20 @@ get_file_provider(Filename) ->
 %%
 %%      The file must have been opened with modes `read' and `binary'.
 %%
-%%      When the provider is exhausted, the position of the `IoDevice'
-%%      is at `eof'.
+%%      Note that this provider is stateful, because the underlying
+%%      `IoDevice' is stateful. This means that reading from the provider
+%%      changes the state of the `IoDevice' (namely, advancing the position),
+%%      and is itself affected by any external changes to the state of the
+%%      `IoDevice'.
+%%
+%%      When the position of the `IoDevice' is at `eof', the provider is
+%%      exhausted.
 %%
 %%      The `IoDevice' is not closed implicitly by the provider, instead
 %%      the code using this provider is responsible for closing it.
 %%
 %%      This provider can be used in
+%%      {@link decode_init/2. `decode_init/1,2'}.
 %%      {@link decode_fold/4. `decode_fold/3,4'},
 %%      {@link decode_foreach/3. `decode_foreach/2,3'},
 %%      {@link decode_filter/3. `decode_filter/2,3'},
@@ -482,12 +517,12 @@ get_file_provider(Filename) ->
 get_file_provider(IoDevice, ChunkSize) when is_integer(ChunkSize), ChunkSize > 0 ->
 	fun() -> file_provider(IoDevice, ChunkSize) end.
 
-file_provider(Io, ChunkSize) ->
-	case file:read(Io, ChunkSize) of
+file_provider(IoDevice, ChunkSize) ->
+	case file:read(IoDevice, ChunkSize) of
 		eof ->
 			end_of_data;
 		{ok, Data} when is_binary(Data) ->
-			{Data, fun() -> file_provider(Io, ChunkSize) end}
+			{Data, fun() -> file_provider(IoDevice, ChunkSize) end}
 	end.
 
 %% @equiv encode(Lines, default_encode_options())
